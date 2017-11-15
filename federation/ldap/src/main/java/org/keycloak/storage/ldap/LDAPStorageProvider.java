@@ -17,6 +17,7 @@
 
 package org.keycloak.storage.ldap;
 
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -54,8 +55,6 @@ import org.keycloak.models.UserManager;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.cache.UserCache;
 import org.keycloak.models.credential.PasswordUserCredentialModel;
-import org.keycloak.models.utils.KeycloakModelUtils;
-import org.keycloak.models.utils.ReadOnlyUserModelDelegate;
 import org.keycloak.storage.ReadOnlyException;
 import org.keycloak.storage.StorageId;
 import org.keycloak.storage.UserStorageProvider;
@@ -76,6 +75,8 @@ import org.keycloak.storage.user.ImportedUserValidation;
 import org.keycloak.storage.user.UserLookupProvider;
 import org.keycloak.storage.user.UserQueryProvider;
 import org.keycloak.storage.user.UserRegistrationProvider;
+import org.keycloak.util.query.AttributeNotAllowedException;
+import org.keycloak.util.query.FilterQuery;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -322,7 +323,21 @@ public class LDAPStorageProvider implements UserStorageProvider,
 
     @Override
     public List<UserModel> searchForUser(String search, RealmModel realm, int firstResult, int maxResults) {
-        Map<String, String> attributes = new HashMap<String, String>();
+        try {
+            FilterQuery filterQuery = FilterQuery.parse(search);
+            return searchForUser(filterQuery, realm, firstResult, maxResults);
+        } catch (ParseException e) {
+            logger.warnf("Unable to parse '%s' as filter query. %s. Using attributes deduction fallback.",
+                    search, e.getMessage());
+
+            // deduce search attributes from search as fallback
+            Map<String, String> attributes = deduceSearchAttributes(search);
+            return searchForUser(attributes, realm, firstResult, maxResults);
+        }
+    }
+
+    private Map<String, String> deduceSearchAttributes(String search) {
+        Map<String, String> attributes = new HashMap<>();
         int spaceIndex = search.lastIndexOf(' ');
         if (spaceIndex > -1) {
             String firstName = search.substring(0, spaceIndex).trim();
@@ -336,7 +351,7 @@ public class LDAPStorageProvider implements UserStorageProvider,
             attributes.put(UserModel.LAST_NAME, search.trim());
             attributes.put(UserModel.USERNAME, search.trim().toLowerCase());
         }
-        return searchForUser(attributes, realm, firstResult, maxResults);
+        return attributes;
     }
 
     @Override
@@ -346,9 +361,12 @@ public class LDAPStorageProvider implements UserStorageProvider,
 
     @Override
     public List<UserModel> searchForUser(Map<String, String> params, RealmModel realm, int firstResult, int maxResults) {
-        List<UserModel> searchResults =new LinkedList<UserModel>();
-
         List<LDAPObject> ldapUsers = searchLDAP(realm, params, maxResults + firstResult);
+        return mapLdapObjectsToUserModels(realm, ldapUsers, firstResult, maxResults);
+    }
+
+    private List<UserModel> mapLdapObjectsToUserModels(RealmModel realm, List<LDAPObject> ldapUsers, int firstResult, int maxResults) {
+        List<UserModel> searchResults = new LinkedList<UserModel>();
         int counter = 0;
         for (LDAPObject ldapUser : ldapUsers) {
             if (counter++ < firstResult) continue;
@@ -358,8 +376,30 @@ public class LDAPStorageProvider implements UserStorageProvider,
                 searchResults.add(imported);
             }
         }
-
         return searchResults;
+    }
+
+    public List<UserModel> searchForUser(FilterQuery filterQuery, RealmModel realm, int firstResult, int maxResults) {
+        List<ComponentModel> mappers = realm.getComponents(model.getId(), LDAPStorageMapper.class.getName());
+        LDAPFilterQueryVisitor visitor = new LDAPFilterQueryVisitor(mappers, EscapeStrategy.DEFAULT);
+        String rawLdapQuery;
+            try {
+                rawLdapQuery = filterQuery.accept(visitor);
+            } catch (AttributeNotAllowedException ex) {
+                logger.errorf("Invalid search request. %s", ex.getMessage());
+                throw ex;
+        }
+        List<LDAPObject> ldapObjects = searchLDAPWithRawQuery(realm, rawLdapQuery);
+        return mapLdapObjectsToUserModels(realm, ldapObjects, firstResult, maxResults);
+    }
+
+    private List<LDAPObject> searchLDAPWithRawQuery(RealmModel realm, String rawLdapQuery) {
+        LDAPQuery ldapQuery = LDAPUtils.createQueryForUserSearch(this, realm);
+        LDAPQueryConditionsBuilder conditionsBuilder = new LDAPQueryConditionsBuilder();
+        Condition rawCondition = conditionsBuilder.addCustomLDAPFilter(rawLdapQuery);
+        ldapQuery.addWhereCondition(rawCondition);
+        List<LDAPObject> ldapObjects = ldapQuery.getResultList();
+        return ldapObjects;
     }
 
     @Override

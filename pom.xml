@@ -1175,6 +1175,11 @@
             </dependency>
             <dependency>
                 <groupId>org.keycloak</groupId>
+                <artifactId>keycloak-util-query</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.keycloak</groupId>
                 <artifactId>keycloak-api-docs-dist</artifactId>
                 <version>${project.version}</version>
                 <type>zip</type>

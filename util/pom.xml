@@ -34,6 +34,7 @@
 
     <modules>
         <module>embedded-ldap</module>
+        <module>query</module>
     </modules>
 
 </project>

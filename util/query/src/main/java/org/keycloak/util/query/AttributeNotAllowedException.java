@@ -9,6 +9,11 @@ public class AttributeNotAllowedException extends IllegalArgumentException {
         this.attributeName = attributeName;
     }
 
+    public AttributeNotAllowedException(String attributeName, String additionalMessage) {
+        super("Attribute " + attributeName + " is not allowed in filter query. " + additionalMessage, null);
+        this.attributeName = attributeName;
+    }
+
     public String getAttributeName() {
         return attributeName;
     }

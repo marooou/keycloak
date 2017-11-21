@@ -17,44 +17,18 @@
 
 package org.keycloak.storage.ldap;
 
-import java.text.ParseException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import javax.naming.AuthenticationException;
-
 import org.jboss.logging.Logger;
 import org.keycloak.common.constants.KerberosConstants;
 import org.keycloak.component.ComponentModel;
-import org.keycloak.credential.CredentialAuthentication;
-import org.keycloak.credential.CredentialInput;
-import org.keycloak.credential.CredentialInputUpdater;
-import org.keycloak.credential.CredentialInputValidator;
-import org.keycloak.credential.CredentialModel;
+import org.keycloak.credential.*;
 import org.keycloak.federation.kerberos.impl.KerberosUsernamePasswordAuthenticator;
 import org.keycloak.federation.kerberos.impl.SPNEGOAuthenticator;
-import org.keycloak.models.CredentialValidationOutput;
-import org.keycloak.models.GroupModel;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.LDAPConstants;
-import org.keycloak.models.ModelDuplicateException;
-import org.keycloak.models.ModelException;
+import org.keycloak.models.*;
+import org.keycloak.models.cache.UserCache;
+import org.keycloak.models.credential.PasswordUserCredentialModel;
 import org.keycloak.models.utils.ReadOnlyUserModelDelegate;
 import org.keycloak.policy.PasswordPolicyManagerProvider;
 import org.keycloak.policy.PolicyError;
-import org.keycloak.models.RealmModel;
-import org.keycloak.models.RoleModel;
-import org.keycloak.models.UserCredentialModel;
-import org.keycloak.models.UserManager;
-import org.keycloak.models.UserModel;
-import org.keycloak.models.cache.UserCache;
-import org.keycloak.models.credential.PasswordUserCredentialModel;
 import org.keycloak.storage.ReadOnlyException;
 import org.keycloak.storage.StorageId;
 import org.keycloak.storage.UserStorageProvider;
@@ -71,12 +45,20 @@ import org.keycloak.storage.ldap.mappers.LDAPOperationDecorator;
 import org.keycloak.storage.ldap.mappers.LDAPStorageMapper;
 import org.keycloak.storage.ldap.mappers.LDAPStorageMapperManager;
 import org.keycloak.storage.ldap.mappers.PasswordUpdateCallback;
+import org.keycloak.storage.ldap.query.LDAPFilterQueryVisitor;
+import org.keycloak.storage.ldap.query.LDAPMapping;
+import org.keycloak.storage.ldap.query.LDAPMappingFactory;
 import org.keycloak.storage.user.ImportedUserValidation;
 import org.keycloak.storage.user.UserLookupProvider;
 import org.keycloak.storage.user.UserQueryProvider;
 import org.keycloak.storage.user.UserRegistrationProvider;
 import org.keycloak.util.query.AttributeNotAllowedException;
 import org.keycloak.util.query.FilterQuery;
+
+import javax.naming.AuthenticationException;
+import java.text.ParseException;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -327,7 +309,7 @@ public class LDAPStorageProvider implements UserStorageProvider,
             FilterQuery filterQuery = FilterQuery.parse(search);
             return searchForUser(filterQuery, realm, firstResult, maxResults);
         } catch (ParseException e) {
-            logger.warnf("Unable to parse '%s' as filter query. %s. Using attributes deduction fallback.",
+            logger.warnf("Unable to parse '%s' as a filter query. %s. Using attributes deduction fallback.",
                     search, e.getMessage());
 
             // deduce search attributes from search as fallback
@@ -381,7 +363,9 @@ public class LDAPStorageProvider implements UserStorageProvider,
 
     public List<UserModel> searchForUser(FilterQuery filterQuery, RealmModel realm, int firstResult, int maxResults) {
         List<ComponentModel> mappers = realm.getComponents(model.getId(), LDAPStorageMapper.class.getName());
-        LDAPFilterQueryVisitor visitor = new LDAPFilterQueryVisitor(mappers, EscapeStrategy.DEFAULT);
+        LDAPMappingFactory mappingFactory = new LDAPMappingFactory();
+        List<LDAPMapping> mappings = mappingFactory.createMappings(mappers);
+        LDAPFilterQueryVisitor visitor = new LDAPFilterQueryVisitor(mappings, EscapeStrategy.DEFAULT);
         String rawLdapQuery;
             try {
                 rawLdapQuery = filterQuery.accept(visitor);

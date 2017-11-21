@@ -1,10 +1,8 @@
-package org.keycloak.storage.ldap;
+package org.keycloak.storage.ldap.query;
 
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.storage.ldap.idm.query.EscapeStrategy;
-import org.keycloak.storage.ldap.mappers.UserAttributeLDAPStorageMapper;
-import org.keycloak.storage.ldap.mappers.UserAttributeLDAPStorageMapperFactory;
 import org.keycloak.util.query.AttributeNotAllowedException;
 import org.keycloak.util.query.FilterQueryBaseVisitor;
 import org.keycloak.util.query.FilterQueryParser;
@@ -14,19 +12,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
+public final class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
 
-    private final Map<String, ComponentModel> mappers;
+    private final Map<String, LDAPMapping> mappings;
     private final EscapeStrategy escapeStrategy;
 
-    public LDAPFilterQueryVisitor(List<ComponentModel> mappers, EscapeStrategy escapeStrategy) {
+    public LDAPFilterQueryVisitor(List<LDAPMapping> mappings, EscapeStrategy escapeStrategy) {
         this.escapeStrategy = escapeStrategy;
-        this.mappers = mappers.stream()
-               .filter(m -> m.getProviderId().equals(UserAttributeLDAPStorageMapperFactory.PROVIDER_ID))
-               .collect(Collectors.toMap(
-                   m -> m.get(UserAttributeLDAPStorageMapper.USER_MODEL_ATTRIBUTE),
-                   m -> m)
-               );
+        this.mappings = mappings.stream().collect(Collectors.toMap(
+            m -> m.getUserModelAttribute(),
+            m -> m
+        ));
     }
 
     @Override
@@ -54,8 +50,9 @@ class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
         String userModelAttributeName = ctx.getChild(0).getText();
         String operator = ctx.getChild(1).getText();
         String value = ctx.getChild(2).getText();
-        String ldapAttributeName = getLdapAttributeName(userModelAttributeName);
-        String ldapValue = getLdapValue(value);
+        LDAPMapping ldapMapping = getMappingFor(userModelAttributeName);
+        String ldapAttributeName = ldapMapping.getLdapAttribute();
+        String ldapValue = getLdapValue(ldapMapping, value);
         switch (operator) {
             case "equals":
                 return String.format("(%s=%s)", ldapAttributeName, ldapValue);
@@ -66,11 +63,11 @@ class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
             case "contains":
                 return String.format("(%s=*%s*)", ldapAttributeName, ldapValue);
             case "lt":
-                return String.format("(!(%s>=%s))", ldapAttributeName, ldapValue, ldapAttributeName, ldapValue);
+                return String.format("(!(%s>=%s))", ldapAttributeName, ldapValue);
             case "le":
                 return String.format("(%s<=%s)", ldapAttributeName, ldapValue);
             case "gt":
-                return String.format("(!(%s<=%s))", ldapAttributeName, ldapValue, ldapAttributeName, ldapValue);
+                return String.format("(!(%s<=%s))", ldapAttributeName, ldapValue);
             case "ge":
                 return String.format("(%s>=%s)", ldapAttributeName, ldapValue);
             default:
@@ -82,10 +79,12 @@ class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
     public String visitInExpression(FilterQueryParser.InExpressionContext ctx) {
         List<String> ldapValues = new ArrayList<>();
         String userModelAttributeName = ctx.getChild(0).getText();
-        String ldapAttributeName = getLdapAttributeName(userModelAttributeName);
+
+        LDAPMapping ldapMapping = getMappingFor(userModelAttributeName);
+        String ldapAttributeName = ldapMapping.getLdapAttribute();
         for (int idx = 3; idx < ctx.children.size() - 1; idx += 2) {
             String value = ctx.children.get(idx).getText();
-            ldapValues.add(getLdapValue(value));
+            ldapValues.add(getLdapValue(ldapMapping, value));
         }
         String joinedValues = ldapValues.stream()
                 .map(v -> String.format("(%s=%s)", ldapAttributeName, v))
@@ -100,12 +99,12 @@ class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
         return String.format("%s%s", emptyIfNull(aggregate), emptyIfNull(nextResult));
     }
 
-    private String getLdapAttributeName(String userModelAttributeName) {
-        ComponentModel mapper = this.mappers.get(userModelAttributeName);
-        if (mapper == null) {
-            throw new AttributeNotAllowedException(userModelAttributeName);
-        }
-        return mapper.get(UserAttributeLDAPStorageMapper.LDAP_ATTRIBUTE);
+    private String getLdapValue(LDAPMapping ldapMapping, String value) {
+        String actualValue = value.startsWith("\"")
+                ? value.substring(1, value.length() - 1)
+                : value;
+        actualValue = escapeStrategy.escape(actualValue);
+        return ldapMapping.getLdapValue(actualValue);
     }
 
     private String processLogicalOperator(ParserRuleContext ctx, String logicalFormat) {
@@ -115,11 +114,12 @@ class LDAPFilterQueryVisitor extends FilterQueryBaseVisitor<String> {
                 : childrenFormat;
     }
 
-    private String getLdapValue(String value) {
-        String actualValue = value.startsWith("\"")
-                ? value.substring(1, value.length() - 1)
-                : value;
-        return escapeStrategy.escape(actualValue);
+    private LDAPMapping getMappingFor(String userModelAttribute) {
+        LDAPMapping ldapMapping = this.mappings.get(userModelAttribute);
+        if (ldapMapping == null) {
+            throw new AttributeNotAllowedException(userModelAttribute);
+        }
+        return ldapMapping;
     }
 
     private static String emptyIfNull(String value) {

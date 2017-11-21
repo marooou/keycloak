@@ -1,4 +1,4 @@
-package org.keycloak.storage.ldap;
+package org.keycloak.storage.ldap.query;
 
 
 import org.junit.Before;
@@ -23,11 +23,13 @@ public class LDAPFilterQueryVisitorTest {
     public void setUp() throws Exception {
         List<ComponentModel> mappers = new ArrayList<>();
         mappers.add(createFullNameMapper("cn"));
+        mappers.add(createGroupMapper("ou=people,dc=keycloak,dc=org", "cn", "isMemberOf"));
         mappers.add(createUserAttributeMapper("givenname", "firstName"));
         mappers.add(createUserAttributeMapper("sn", "lastName"));
         mappers.add(createUserAttributeMapper("uid", "username"));
         mappers.add(createUserAttributeMapper("mail", "email"));
-        visitor = new LDAPFilterQueryVisitor(mappers, EscapeStrategy.DEFAULT);
+        List<LDAPMapping> mappings = new LDAPMappingFactory().createMappings(mappers);
+        visitor = new LDAPFilterQueryVisitor(mappings, EscapeStrategy.DEFAULT);
     }
 
     @Test
@@ -144,6 +146,18 @@ public class LDAPFilterQueryVisitorTest {
                 .isTranslatedTo("(&(uid=j*)(|(|(givenname=John)(givenname=Janice))(sn=Doe)))");
     }
 
+    @Test
+    public void fullNameComparison() {
+        assertQuery("fullName startswith \"Mark\"")
+                .isTranslatedTo("(cn=Mark*)");
+    }
+
+    @Test
+    public void groupComparison() {
+        assertQuery("groups in (\"Admin\")")
+                .isTranslatedTo("(isMemberOf=cn=Admin,ou=people,dc=keycloak,dc=org)");
+    }
+
     /* Test utilities */
 
     private static ComponentModel createUserAttributeMapper(String ldapAttribute, String userModelAttribute) {
@@ -161,16 +175,16 @@ public class LDAPFilterQueryVisitorTest {
         return componentModel;
     }
 
-    private static ComponentModel createGroupMapper() {
+    private static ComponentModel createGroupMapper(String groupsDn, String groupNameAttribute, String memberOfAttribute) {
         ComponentModel componentModel = new ComponentModel();
         componentModel.setProviderId("group-ldap-mapper");
         componentModel.put("membership.attribute.type", "DN");
-        componentModel.put("user.roles.retrieve.strategy", "LOAD_GROUPS_BY_MEMBER_ATTRIBUTE");
-        componentModel.put("group.name.ldap.attribute", "cn");
+        componentModel.put("user.roles.retrieve.strategy", "GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE");
+        componentModel.put("group.name.ldap.attribute", groupNameAttribute);
         componentModel.put("membership.ldap.attribute", "uniqueMember");
         componentModel.put("membership.user.ldap.attribute", "uid");
-        componentModel.put("groups.dn", "ou=groups,dc=example,dc=com");
-        componentModel.put("groups.dn", "ou=groups,dc=example,dc=com");
+        componentModel.put("memberof.ldap.attribute", memberOfAttribute);
+        componentModel.put("groups.dn", groupsDn);
         componentModel.put("group.object.classes", "groupOfUniqueNames");
         return componentModel;
     }
